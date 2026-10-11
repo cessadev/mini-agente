@@ -57,6 +57,32 @@ def is_daily_quota(err):
 cases = json.loads(Path("evals.json").read_text(encoding="utf-8"))
 done = json.loads(OUT.read_text(encoding="utf-8")) if OUT.exists() else {}
 
+if os.getenv("REGRADE") == "1":
+    # Recalifica respuestas ya guardadas con el evals.json actual. No llama a la API.
+    cases_by_id = {c["id"]: c for c in cases}
+    sin_respuesta = []
+    for key, entry in done.items():
+        if entry.get("status") not in ("PASS", "FAIL"):
+            continue
+        if "answer" not in entry:
+            sin_respuesta.append(key)
+            continue
+        case = cases_by_id.get(key.rsplit("#", 1)[0])
+        if case is None:
+            continue
+        ok, why = grade(entry["answer"], case)
+        new_status = "PASS" if ok else "FAIL"
+        if new_status != entry["status"]:
+            print(f"{key}: {entry['status']} -> {new_status}")
+        entry["status"], entry["detail"] = new_status, why
+    OUT.write_text(json.dumps(done, ensure_ascii=False, indent=2), encoding="utf-8")
+    for key in sin_respuesta:
+        print(f"{key}: sin respuesta guardada (no recalificable)")
+    counts = [v.get("status") for v in done.values()]
+    print(f"\nModelo: {MODEL} | PASS {counts.count('PASS')} | "
+          f"FAIL {counts.count('FAIL')} | ERROR {counts.count('ERROR')}")
+    sys.exit(0)
+
 for case in cases:
     for run in range(RUNS):
         key = f"{case['id']}#{run}"
@@ -77,9 +103,10 @@ for case in cases:
         if out is None:
             done[key] = {"status": "ERROR", "detail": err, "iters": 0}
         else:
-            ok, why = grade(extract_answer(out), case)
+            answer = extract_answer(out)
+            ok, why = grade(answer, case)
             done[key] = {"status": "PASS" if ok else "FAIL", "detail": why,
-                         "iters": out.count("[Iteración")}
+                         "iters": out.count("[Iteración"), "answer": answer}
         OUT.write_text(json.dumps(done, ensure_ascii=False, indent=2), encoding="utf-8")
         d = done[key]
         print(f"{d['status']:<5} {key:<18} iters={d['iters']}  {d['detail']}")
