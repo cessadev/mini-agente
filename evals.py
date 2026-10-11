@@ -3,7 +3,11 @@ from pathlib import Path
 
 RUNS = int(os.getenv("RUNS", "1"))
 MODEL = os.getenv("MODEL", "default")
+DELAY = float(os.getenv("DELAY", "6"))
+TIMEOUT = int(os.getenv("TIMEOUT", "120"))
+RETRIES = int(os.getenv("RETRIES", "2"))
 MARK = "RESPUESTA FINAL DEL MODELO:"
+OUT = Path(f"resultados_{MODEL}.json")
 
 
 def extract_answer(stdout):
@@ -31,27 +35,62 @@ def grade(answer, case):
     return True, "ok"
 
 
-cases = json.loads(Path("evals.json").read_text(encoding="utf-8"))
-results = []
-for case in cases:
-    passes, iters, notes = 0, [], []
-    for _ in range(RUNS):
-        try:
-            p = subprocess.run([sys.executable, "agente.py", case["question"]],
-                               capture_output=True, text=True, timeout=180)
-            out = p.stdout
-            err = p.stderr[-150:] if p.returncode != 0 else ""
-        except subprocess.TimeoutExpired:
-            out, err = "", "timeout"
-        ok, why = grade(extract_answer(out), case)
-        passes += ok
-        iters.append(out.count("[Iteración"))
-        notes.append(why if not err else f"{why} | {err}")
-        time.sleep(2)  # evita saturar la cuota gratuita
-    results.append({"id": case["id"], "passes": passes, "runs": RUNS,
-                    "avg_iters": sum(iters) / RUNS, "notes": notes})
-    print(f"{'OK ' if passes == RUNS else 'FAIL'} {case['id']:<16} {passes}/{RUNS}  iters={sum(iters)/RUNS:.1f}  {notes[-1]}")
+def run_once(question):
+    """Devuelve (stdout, error). error != '' significa fallo de infraestructura."""
+    try:
+        p = subprocess.run([sys.executable, "agente.py", question],
+                           capture_output=True, text=True, timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return None, "timeout (evals)"
+    if p.returncode != 0:
+        msg = p.stderr.strip()
+        # código 2 = error controlado de agente.py: el mensaje útil está al inicio
+        return None, "error: " + (msg[:300] if p.returncode == 2 else msg[-300:])
+    return p.stdout, ""
 
-total = sum(r["passes"] for r in results)
-print(f"\nModelo: {MODEL} | Aciertos: {total}/{len(cases) * RUNS}")
-Path(f"resultados_{MODEL}.json").write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def is_daily_quota(err):
+    e = err.lower()
+    return "límite/cuota" in e and "per day" in e
+
+
+cases = json.loads(Path("evals.json").read_text(encoding="utf-8"))
+done = json.loads(OUT.read_text(encoding="utf-8")) if OUT.exists() else {}
+
+for case in cases:
+    for run in range(RUNS):
+        key = f"{case['id']}#{run}"
+        if done.get(key, {}).get("status") in ("PASS", "FAIL"):
+            continue  # ya medido
+        out, err = None, ""
+        for attempt in range(RETRIES + 1):
+            out, err = run_once(case["question"])
+            if out is not None or is_daily_quota(err):
+                break
+            if attempt < RETRIES:
+                time.sleep(20 * (attempt + 1))
+        if out is None and is_daily_quota(err):
+            print(f"\nCUOTA DIARIA AGOTADA para {MODEL}: {err}")
+            print("Ejecución detenida. Lo medido está guardado; repite el comando "
+                  "cuando se reinicie la cuota, o usa otro modelo.")
+            sys.exit(3)
+        if out is None:
+            done[key] = {"status": "ERROR", "detail": err, "iters": 0}
+        else:
+            ok, why = grade(extract_answer(out), case)
+            done[key] = {"status": "PASS" if ok else "FAIL", "detail": why,
+                         "iters": out.count("[Iteración")}
+        OUT.write_text(json.dumps(done, ensure_ascii=False, indent=2), encoding="utf-8")
+        d = done[key]
+        print(f"{d['status']:<5} {key:<18} iters={d['iters']}  {d['detail']}")
+        time.sleep(DELAY)
+
+vals = [done.get(f"{c['id']}#{r}", {"status": "ERROR"}) for c in cases for r in range(RUNS)]
+n_pass = sum(v["status"] == "PASS" for v in vals)
+n_fail = sum(v["status"] == "FAIL" for v in vals)
+n_err = sum(v["status"] == "ERROR" for v in vals)
+print(f"\nModelo: {MODEL} | PASS {n_pass} | FAIL {n_fail} | ERROR {n_err}")
+if n_pass + n_fail:
+    print(f"Precisión sobre respuestas válidas: {n_pass}/{n_pass + n_fail}")
+if n_err:
+    print("Hay ERRORES de infraestructura: repite el mismo comando, solo reintentará esos casos.")
