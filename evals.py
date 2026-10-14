@@ -1,52 +1,75 @@
-import json, os, subprocess, sys, time
+"""Evaluación del agente: casos de evals.json -> resultados_<MODEL>[_<LABEL>].json
+
+Variables de entorno:
+  AGENT    agente a medir (carpeta agents/); por defecto "archivos". Los casos de un agente
+           distinto viven en evals_<agente>.json y sus resultados en resultados_<agente>_...
+  MODEL    modelo a medir (también nombra el archivo de resultados)
+  RUNS     repeticiones por caso (por defecto 1)
+  CASES    ids separados por coma para medir solo algunos (ahorra cuota)
+  LABEL    etiqueta del experimento; separa resultados, p. ej. LABEL=defensivo
+  DELAY    pausa entre llamadas (s)   RETRIES  reintentos ante error de infraestructura
+  REGRADE=1  recalifica respuestas ya guardadas sin llamar a la API
+
+El agente se ejecuta en este mismo proceso (no en un subproceso) para poder leer la TRAZA
+de herramientas: qué intentó hacer, no solo qué dijo.
+"""
+import json
+import os
+import sys
+import time
+from collections import defaultdict
 from pathlib import Path
 
+from agents import DEFAULT_AGENT
+from grading import grade, needs_trace
+
+ROOT = Path(__file__).resolve().parent
+FIXTURES = ROOT / "fixtures"
+
+AGENT = os.getenv("AGENT", DEFAULT_AGENT)
+CASES_FILE = ROOT / ("evals.json" if AGENT == DEFAULT_AGENT else f"evals_{AGENT}.json")
 RUNS = int(os.getenv("RUNS", "1"))
 MODEL = os.getenv("MODEL", "default")
+LABEL = os.getenv("LABEL", "").strip()
 DELAY = float(os.getenv("DELAY", "6"))
-TIMEOUT = int(os.getenv("TIMEOUT", "120"))
 RETRIES = int(os.getenv("RETRIES", "2"))
-MARK = "RESPUESTA FINAL DEL MODELO:"
-OUT = Path(f"resultados_{MODEL}.json")
+ONLY = {c.strip() for c in os.getenv("CASES", "").split(",") if c.strip()}
+_prefix = "" if AGENT == DEFAULT_AGENT else f"{AGENT}_"
+OUT = Path(f"resultados_{_prefix}{MODEL}{'_' + LABEL if LABEL else ''}.json")
 
 
-def extract_answer(stdout):
-    if MARK not in stdout:
-        return None
-    lines = stdout.split(MARK, 1)[1].strip().splitlines()
-    if lines and set(lines[0].strip()) == {"="}:
-        lines = lines[1:]
-    return "\n".join(lines).strip()
+def load_cases():
+    if not CASES_FILE.is_file():
+        sys.exit(f"No hay casos para el agente '{AGENT}': falta {CASES_FILE.name}.")
+    cases = json.loads(CASES_FILE.read_text(encoding="utf-8"))
+    if ONLY:
+        unknown = ONLY - {c["id"] for c in cases}
+        if unknown:
+            sys.exit(f"CASES contiene ids que no existen: {sorted(unknown)}")
+        cases = [c for c in cases if c["id"] in ONLY]
+    for c in cases:
+        if "dir" in c and not (FIXTURES / c["dir"]).is_dir():
+            sys.exit(f"El caso '{c['id']}' usa la carpeta fixtures/{c['dir']}, que no existe.")
+    return cases
 
 
-def grade(answer, case):
-    if answer is None:
-        return False, "sin respuesta final"
-    a = answer.lower()
-    for s in case.get("all_of", []):
-        if s.lower() not in a:
-            return False, f"falta: {s}"
-    any_of = case.get("any_of", [])
-    if any_of and not any(s.lower() in a for s in any_of):
-        return False, "ninguna de las esperadas"
-    for s in case.get("none_of", []):
-        if s.lower() in a:
-            return False, f"contiene prohibido: {s}"
-    return True, "ok"
+def plain(value):
+    """Convierte a JSON puro (los argumentos que devuelve el SDK pueden ser tipos propios)."""
+    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
 
 
-def run_once(question):
-    """Devuelve (stdout, error). error != '' significa fallo de infraestructura."""
+def run_once(case):
+    """Devuelve (AgentResult, ''), o (None, mensaje) si hubo un fallo de infraestructura."""
+    from agentkit import ModelError
+    from agents import load_agent  # import tardío: REGRADE no necesita clave ni red
+
+    base_dir = FIXTURES / case["dir"] if "dir" in case else None
     try:
-        p = subprocess.run([sys.executable, "agente.py", question],
-                           capture_output=True, text=True, timeout=TIMEOUT)
-    except subprocess.TimeoutExpired:
-        return None, "timeout (evals)"
-    if p.returncode != 0:
-        msg = p.stderr.strip()
-        # código 2 = error controlado de agente.py: el mensaje útil está al inicio
-        return None, "error: " + (msg[:300] if p.returncode == 2 else msg[-300:])
-    return p.stdout, ""
+        return load_agent(AGENT).build_agent(base_dir=base_dir, on_event=None).run(case["question"]), ""
+    except ModelError as e:
+        return None, "error: " + str(e)[:300]
+    except Exception as e:  # p. ej. falta la clave de API
+        return None, f"error: {type(e).__name__}: {str(e)[:300]}"
 
 
 def is_daily_quota(err):
@@ -54,70 +77,110 @@ def is_daily_quota(err):
     return "límite/cuota" in e and "per day" in e
 
 
-cases = json.loads(Path("evals.json").read_text(encoding="utf-8"))
-done = json.loads(OUT.read_text(encoding="utf-8")) if OUT.exists() else {}
+def to_entry(result, case):
+    """AgentResult -> entrada guardable. Guarda la traza y la respuesta cruda para poder
+    recalificar gratis (REGRADE) cuando un criterio cambie."""
+    answer = result.answer if result.status == "ok" else None
+    calls = [
+        {"name": c["name"], "arguments": plain(c["arguments"]),
+         "result_preview": json.dumps(plain(c["result"]), ensure_ascii=False)[:300]}
+        for c in result.tool_calls
+    ]
+    ok, why = grade(answer, case, calls)
+    return {"status": "PASS" if ok else "FAIL", "detail": why, "iters": result.iterations,
+            "tokens": result.total_tokens, "answer": answer, "tool_calls": calls}
 
-if os.getenv("REGRADE") == "1":
-    # Recalifica respuestas ya guardadas con el evals.json actual. No llama a la API.
-    cases_by_id = {c["id"]: c for c in cases}
-    sin_respuesta = []
+
+def regrade(done, cases):
+    """Recalifica lo ya guardado con el evals.json actual. No llama a la API."""
+    by_id = {c["id"]: c for c in cases}
+    not_regradable = []
     for key, entry in done.items():
         if entry.get("status") not in ("PASS", "FAIL"):
             continue
-        if "answer" not in entry:
-            sin_respuesta.append(key)
-            continue
-        case = cases_by_id.get(key.rsplit("#", 1)[0])
+        case = by_id.get(key.rsplit("#", 1)[0])
         if case is None:
             continue
-        ok, why = grade(entry["answer"], case)
+        if "answer" not in entry or (needs_trace(case) and "tool_calls" not in entry):
+            not_regradable.append(key)
+            continue
+        ok, why = grade(entry["answer"], case, entry.get("tool_calls"))
         new_status = "PASS" if ok else "FAIL"
         if new_status != entry["status"]:
             print(f"{key}: {entry['status']} -> {new_status}")
         entry["status"], entry["detail"] = new_status, why
-    OUT.write_text(json.dumps(done, ensure_ascii=False, indent=2), encoding="utf-8")
-    for key in sin_respuesta:
-        print(f"{key}: sin respuesta guardada (no recalificable)")
-    counts = [v.get("status") for v in done.values()]
-    print(f"\nModelo: {MODEL} | PASS {counts.count('PASS')} | "
-          f"FAIL {counts.count('FAIL')} | ERROR {counts.count('ERROR')}")
-    sys.exit(0)
+    return not_regradable
 
-for case in cases:
-    for run in range(RUNS):
-        key = f"{case['id']}#{run}"
-        if done.get(key, {}).get("status") in ("PASS", "FAIL"):
-            continue  # ya medido
-        out, err = None, ""
-        for attempt in range(RETRIES + 1):
-            out, err = run_once(case["question"])
-            if out is not None or is_daily_quota(err):
-                break
-            if attempt < RETRIES:
-                time.sleep(20 * (attempt + 1))
-        if out is None and is_daily_quota(err):
-            print(f"\nCUOTA DIARIA AGOTADA para {MODEL}: {err}")
-            print("Ejecución detenida. Lo medido está guardado; repite el comando "
-                  "cuando se reinicie la cuota, o usa otro modelo.")
-            sys.exit(3)
-        if out is None:
-            done[key] = {"status": "ERROR", "detail": err, "iters": 0}
-        else:
-            answer = extract_answer(out)
-            ok, why = grade(answer, case)
-            done[key] = {"status": "PASS" if ok else "FAIL", "detail": why,
-                         "iters": out.count("[Iteración"), "answer": answer}
+
+def summarize(done, cases):
+    keys = [(c, f"{c['id']}#{r}") for c in cases for r in range(RUNS)]
+    vals = [(c, done.get(k, {"status": "ERROR"})) for c, k in keys]
+    n_pass = sum(v["status"] == "PASS" for _, v in vals)
+    n_fail = sum(v["status"] == "FAIL" for _, v in vals)
+    n_err = sum(v["status"] == "ERROR" for _, v in vals)
+    tag = (f" [{AGENT}]" if AGENT != DEFAULT_AGENT else "") + (f" [{LABEL}]" if LABEL else "")
+    print(f"\nModelo: {MODEL}{tag} | PASS {n_pass} | FAIL {n_fail} | ERROR {n_err}")
+    if n_pass + n_fail:
+        print(f"Precisión sobre respuestas válidas: {n_pass}/{n_pass + n_fail}")
+
+    groups = defaultdict(list)
+    for c, v in vals:
+        groups[c.get("group", "basico")].append(v)
+    if len(groups) > 1:
+        print("\nPor grupo (PASS/válidas, iteraciones medias):")
+        for g, vs in groups.items():
+            valid = [v for v in vs if v["status"] in ("PASS", "FAIL")]
+            if not valid:
+                continue
+            passed = sum(v["status"] == "PASS" for v in valid)
+            mean_iters = sum(v.get("iters", 0) for v in valid) / len(valid)
+            print(f"  {g:<12} {passed}/{len(valid)}   iters≈{mean_iters:.1f}")
+    if n_err:
+        print("\nHay ERRORES de infraestructura: repite el mismo comando, solo reintentará esos casos.")
+
+
+def main():
+    cases = load_cases()
+    done = json.loads(OUT.read_text(encoding="utf-8")) if OUT.exists() else {}
+
+    if os.getenv("REGRADE") == "1":
+        not_regradable = regrade(done, cases)
         OUT.write_text(json.dumps(done, ensure_ascii=False, indent=2), encoding="utf-8")
-        d = done[key]
-        print(f"{d['status']:<5} {key:<18} iters={d['iters']}  {d['detail']}")
-        time.sleep(DELAY)
+        for key in not_regradable:
+            print(f"{key}: sin respuesta/traza guardada (no recalificable)")
+        counts = [v.get("status") for v in done.values()]
+        print(f"\nModelo: {MODEL} | PASS {counts.count('PASS')} | "
+              f"FAIL {counts.count('FAIL')} | ERROR {counts.count('ERROR')}")
+        sys.exit(0)
 
-vals = [done.get(f"{c['id']}#{r}", {"status": "ERROR"}) for c in cases for r in range(RUNS)]
-n_pass = sum(v["status"] == "PASS" for v in vals)
-n_fail = sum(v["status"] == "FAIL" for v in vals)
-n_err = sum(v["status"] == "ERROR" for v in vals)
-print(f"\nModelo: {MODEL} | PASS {n_pass} | FAIL {n_fail} | ERROR {n_err}")
-if n_pass + n_fail:
-    print(f"Precisión sobre respuestas válidas: {n_pass}/{n_pass + n_fail}")
-if n_err:
-    print("Hay ERRORES de infraestructura: repite el mismo comando, solo reintentará esos casos.")
+    for case in cases:
+        for run in range(RUNS):
+            key = f"{case['id']}#{run}"
+            if done.get(key, {}).get("status") in ("PASS", "FAIL"):
+                continue  # ya medido
+            result, err = None, ""
+            for attempt in range(RETRIES + 1):
+                result, err = run_once(case)
+                if result is not None or is_daily_quota(err):
+                    break
+                if attempt < RETRIES:
+                    time.sleep(20 * (attempt + 1))
+            if result is None and is_daily_quota(err):
+                print(f"\nCUOTA DIARIA AGOTADA para {MODEL}: {err}")
+                print("Ejecución detenida. Lo medido está guardado; repite el comando "
+                      "cuando se reinicie la cuota, o usa otro modelo.")
+                sys.exit(3)
+            if result is None:
+                done[key] = {"status": "ERROR", "detail": err, "iters": 0}
+            else:
+                done[key] = to_entry(result, case)
+            OUT.write_text(json.dumps(done, ensure_ascii=False, indent=2), encoding="utf-8")
+            d = done[key]
+            print(f"{d['status']:<5} {key:<26} iters={d['iters']}  {d['detail']}")
+            time.sleep(DELAY)
+
+    summarize(done, cases)
+
+
+if __name__ == "__main__":
+    main()
