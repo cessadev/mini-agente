@@ -1,8 +1,8 @@
-"""Restricción de rutas: la defensa real contra path traversal.
+"""Path restriction: the real defense against path traversal.
 
-La salida del modelo es una entrada NO confiable. Por eso la ruta se resuelve primero
-(resolve() colapsa los `..` y sigue los enlaces simbólicos) y solo después se comprueba
-que sigue dentro de la carpeta permitida. Revisar la cadena buscando ".." sería eludible.
+The model's output is untrusted input. That is why the path is resolved first
+(resolve() collapses `..` and follows symlinks) and only then checked to still be inside
+the allowed folder. Checking the string for ".." would be bypassable.
 """
 from pathlib import Path
 
@@ -16,7 +16,7 @@ def resolve_safe_path(base_dir, rel_path: str = ".") -> Path:
 
     cleaned = rel_path.strip()
 
-    # Normalizar si el modelo envía la ruta incluyendo la carpeta base
+    # Normalize if the model sends the path including the base folder
     if cleaned.startswith("./"):
         cleaned = cleaned[2:]
     if cleaned.startswith(f"{name}/"):

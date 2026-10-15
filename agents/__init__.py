@@ -1,14 +1,14 @@
-"""Definiciones de agentes. Añadir un agente = añadir UN archivo en esta carpeta.
+"""Agent definitions. Adding an agent = adding ONE file in this folder.
 
-Contrato de un módulo de agente (lo vigila test_agents.py):
-  TITLE, DEFAULT_BASE_DIR, DEFAULT_QUESTION   para la CLI
-  build_agent(base_dir=None, on_event=...)    devuelve un agentkit.Agent
+Contract of an agent module (enforced by test_agents.py):
+  TITLE, DEFAULT_BASE_DIR, DEFAULT_QUESTION   used by the CLI
+  build_agent(base_dir=None, on_event=...)    returns an agentkit.Agent
 """
 import importlib
 import pkgutil
 from pathlib import Path
 
-DEFAULT_AGENT = "archivos"
+DEFAULT_AGENT = "files"
 _NOT_AGENTS = {"common"}
 
 
@@ -19,5 +19,5 @@ def available():
 
 def load_agent(name: str):
     if name not in available():
-        raise ValueError(f"Agente desconocido: '{name}'. Disponibles: {', '.join(available())}.")
+        raise ValueError(f"Unknown agent: '{name}'. Available: {', '.join(available())}.")
     return importlib.import_module(f"agents.{name}")

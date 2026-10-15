@@ -1,7 +1,7 @@
-"""Piezas de la capa de aplicación que comparten TODOS los agentes (no son el núcleo).
+"""Pieces of the application layer shared by ALL agents (they are not the core).
 
-El núcleo (agentkit) no sabe de .env, de consola ni de qué proveedor se usa por defecto;
-eso se decide aquí, una sola vez, para que cada agente sea solo su definición.
+The core (agentkit) knows nothing about .env, the console or which provider is used by default;
+that is decided here, once, so that each agent is just its definition.
 """
 import os
 from pathlib import Path
@@ -11,7 +11,7 @@ from agentkit import GeminiClient
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Carga de variables de entorno opcional desde .env (sin dependencias adicionales)
+# Optional loading of environment variables from .env (no extra dependencies)
 _env_file = ROOT / ".env"
 if _env_file.is_file():
     for _line in _env_file.read_text(encoding="utf-8").splitlines():
@@ -34,34 +34,34 @@ def make_model() -> GeminiClient:
 
 
 def system_prompt(default: Optional[str] = None) -> Optional[str]:
-    """Instrucción de sistema del agente. AGENT_SYSTEM_PROMPT manda sobre el valor por defecto
-    del agente; si está definida pero vacía, significa 'sin instrucción de sistema' (útil para
-    comparar con y sin prompt)."""
+    """System instruction of the agent. AGENT_SYSTEM_PROMPT takes precedence over the agent's
+    default; if it is defined but empty it means 'no system instruction' (useful to compare
+    with and without a prompt)."""
     if "AGENT_SYSTEM_PROMPT" in os.environ:
         return os.environ["AGENT_SYSTEM_PROMPT"] or None
     return default
 
 
 def print_event(event: dict) -> None:
-    """Traduce los eventos del agente a la salida de consola de siempre."""
+    """Translates the agent events into the console output."""
     kind = event["type"]
     if kind == "iteration":
-        print(f"\n[Iteración {event['iteration']}/{event['max']}] "
-              f"Solicitudes de función detectadas ({event['calls']}):")
+        print(f"\n[Iteration {event['iteration']}/{event['max']}] "
+              f"Function requests detected ({event['calls']}):")
     elif kind == "tool_call":
-        print(f"  ⚡ Ejecutando: {event['name']}({event['arguments']})")
+        print(f"  ⚡ Running: {event['name']}({event['arguments']})")
     elif kind == "tool_result":
-        print(f"  📥 Resultado: {event['result']}")
+        print(f"  📥 Result: {event['result']}")
     elif kind == "sending_results":
-        print("  🔄 Enviando resultados a la Gemini API...")
+        print("  🔄 Sending results to the Gemini API...")
     elif kind == "final":
-        print(f"\n[Turno {event['turn']}] El modelo no solicitó más funciones.")
+        print(f"\n[Turn {event['turn']}] The model requested no more functions.")
         print("\n" + "=" * 65)
-        print("📝 RESPUESTA FINAL DEL MODELO:")
+        print("📝 FINAL MODEL ANSWER:")
         print("=" * 65)
         print(event["text"])
     elif kind == "limit_reached":
-        print(f"\n⚠️ Se alcanzó el límite de {event['max']} iteraciones sin respuesta final.")
+        print(f"\n⚠️ Iteration limit of {event['max']} reached without a final answer.")
         if event["text"]:
-            print("\nÚltimo texto recibido:")
+            print("\nLast text received:")
             print(event["text"])

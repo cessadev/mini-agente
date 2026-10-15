@@ -1,8 +1,8 @@
-"""Servidor HTTP local que imita la API Interactions de Gemini con respuestas guionizadas.
+"""Local HTTP server that imitates the Gemini Interactions API with scripted responses.
 
-Sirve para probar el CLI completo (bucle + herramientas + salida) sin red ni cuota.
-Un elemento del guion puede ser (código_http, cuerpo) para simular errores como el 429.
-Guarda cada petición recibida para poder comprobar qué le envía realmente el agente al modelo.
+It is used to test the whole CLI (loop + tools + output) without network or quota.
+An element of the script can be (http_code, body) to simulate errors such as a 429.
+It stores every request received so that it is possible to check what the agent really sends to the model.
 """
 import http.server
 import json
@@ -10,7 +10,7 @@ import threading
 
 
 def tool_call_response(n, calls, usage_tokens=10):
-    """Respuesta en la que el modelo pide herramientas. calls = [(call_id, name, args), ...]"""
+    """Response in which the model asks for tools. calls = [(call_id, name, args), ...]"""
     return {
         "id": f"interaction_{n}",
         "status": "requires_action",
@@ -23,7 +23,7 @@ def tool_call_response(n, calls, usage_tokens=10):
 
 
 def text_response(n, text, usage_tokens=10):
-    """Respuesta final de texto."""
+    """Final text response."""
     return {
         "id": f"interaction_{n}",
         "status": "completed",
@@ -33,14 +33,14 @@ def text_response(n, text, usage_tokens=10):
 
 
 def quota_exceeded_response():
-    """(429, cuerpo) que imita 'cuota diaria agotada'. Úsalo como elemento del guion."""
+    """(429, body) that imitates 'daily quota exhausted'. Use it as an element of the script."""
     return (429, {"error": {"message": "Rate limit exceeded ... limit: 20 requests per day on Free Tier ..."}})
 
 
 class FakeGemini:
     def __init__(self, responses):
         self.responses = list(responses)
-        self.requests = []  # cuerpos JSON recibidos, en orden
+        self.requests = []  # JSON bodies received, in order
         outer = self
 
         class Handler(http.server.BaseHTTPRequestHandler):

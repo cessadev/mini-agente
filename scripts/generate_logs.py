@@ -1,18 +1,18 @@
-"""Genera los logs de ejemplo del agente de logs (fixtures/logs) de forma DETERMINISTA.
+"""Generates the sample logs of the log agent (fixtures/logs) DETERMINISTICALLY.
 
-Un incidente simulado el 2026-10-11:
-  14:01  consultas lentas  ->  14:02  se agota el pool de conexiones  ->  14:03+  timeouts al llamar a wompi
-Hay distractores a propósito (otros errores, otras líneas con "timeout") para que un agente que
-busca a la ligera dé una respuesta incorrecta. La verdad de referencia sale de GROUND_TRUTH.
+A simulated incident on 2026-10-11:
+  14:01  slow queries  ->  14:02  the connection pool is exhausted  ->  14:03+  timeouts calling wompi
+There are distractors on purpose (other errors, other lines containing "timeout") so that an agent
+that searches carelessly gives a wrong answer. The ground truth comes from GROUND_TRUTH.
 
-Un SEGUNDO incidente (fixtures/servicios/gateway.log, 2026-10-12) sirve de caso "retenido":
-una eval de causa raíz con otra causa distinta, para saber si una mejora del agente generaliza o
-solo se ajustó al primer caso. Aquí la causa es un cambio de configuración registrado como INFO
-(un despliegue), con un WARN de latencia en medio que es un SÍNTOMA y un error anterior no relacionado:
-  09:10 despliegue (cache_ttl 300 -> 0)  ->  09:12 latencia alta  ->  09:13 timeouts a la base de datos
+A SECOND incident (fixtures/servicios/gateway.log, 2026-10-12) serves as a "held-out" case:
+a root-cause eval with a different cause, to know whether an improvement of the agent generalizes
+or was only fitted to the first case. Here the cause is a configuration change logged as INFO
+(a deploy), with a WARN latency line in between that is a SYMPTOM and an earlier unrelated error:
+  09:10 deploy (cache_ttl 300 -> 0)  ->  09:12 high latency  ->  09:13 database timeouts
 
-Uso:  python3 scripts/generar_logs.py        (reescribe fixtures/logs/*.log y fixtures/servicios/gateway.log)
-Un test comprueba que los archivos commiteados coinciden con esta salida.
+Usage:  python3 scripts/generate_logs.py     (rewrites fixtures/logs/*.log and fixtures/servicios/gateway.log)
+A test checks that the committed files match this output.
 """
 import random
 from datetime import datetime, timedelta
@@ -35,7 +35,7 @@ def at(hhmmss):
 
 
 def spread(rng, n, start, end):
-    """n instantes distintos (ordenados) entre start y end."""
+    """n distinct (sorted) instants between start and end."""
     span = int((at(end) - at(start)).total_seconds())
     seconds = sorted(rng.sample(range(span), n))
     return [at(start) + timedelta(seconds=s) for s in seconds]
@@ -43,7 +43,7 @@ def spread(rng, n, start, end):
 
 def generate_app_log():
     rng = random.Random(42)
-    ev = []  # (instante, nivel, componente, mensaje)
+    ev = []  # (instant, level, component, message)
 
     t, order = START, 1000
     while t < END:
@@ -59,31 +59,31 @@ def generate_app_log():
             ev.append((t, "INFO", "cache", f"Cache refreshed (keys={rng.randint(20, 400)})"))
         t += timedelta(seconds=rng.randint(6, 15))
 
-    # Arranque: distractores que contienen "timeout" y "wompi" sin ser el error del incidente
+    # Startup: distractors that contain "timeout" and "wompi" without being the incident error
     ev.append((at("13:50:00"), "INFO", "config", "Request timeout set to 30s"))
     ev.append((at("13:50:01"), "INFO", "config", "Wompi client timeout set to 15s"))
 
-    # Otros errores (no son de base de datos)
+    # Other errors (not database ones)
     for hhmmss, i in (("13:55:41", 1), ("14:20:05", 2), ("14:27:44", 3)):
         ev.append((at(hhmmss), "ERROR", "webhook", f"Invalid signature on webhook (source=wompi, id=evt_{i:04d})"))
     ev.append((at("14:08:30"), "WARN", "system", "Disk usage at 81% on /var/log"))
 
-    # Causa raíz: consultas lentas
+    # Root cause: slow queries
     ev.append((at("14:01:12"), "WARN", "db", "Slow query detected (12.4s): SELECT * FROM orders WHERE status='pending'"))
     ev.append((at("14:01:15"), "WARN", "db", "Slow query detected (13.1s): SELECT * FROM orders WHERE status='pending'"))
     ev.append((at("14:01:58"), "WARN", "db", "Slow query detected (15.8s): SELECT * FROM orders WHERE status='pending'"))
 
-    # Consecuencia 1: el pool de conexiones se agota (11 errores, el primero a las 14:02:10)
+    # Consequence 1: the connection pool is exhausted (11 errors, the first at 14:02:10)
     ev.append((at("14:02:10"), "ERROR", "db", "ConnectionPool exhausted: max=20 in use=20"))
     for ts in spread(rng, 10, "14:02:30", "14:14:30"):
         ev.append((ts, "ERROR", "db", "ConnectionPool exhausted: max=20 in use=20"))
 
-    # Consecuencia 2: timeouts al llamar a wompi (37 errores)
+    # Consequence 2: timeouts calling wompi (37 errors)
     for ts in spread(rng, 37, "14:03:05", "14:16:00"):
         ev.append((ts, "ERROR", "payments",
                    f"Timeout calling wompi (order={rng.randint(1100, 1400)}, attempt={rng.randint(1, 3)})"))
 
-    # Recuperación
+    # Recovery
     ev.append((at("14:15:30"), "INFO", "db", "Slow query killed (pid=4412)"))
     ev.append((at("14:16:02"), "INFO", "db", "ConnectionPool recovered (in_use=3)"))
 
@@ -96,7 +96,7 @@ def generate_nginx_log():
     ips = ["192.0.2.10", "192.0.2.77", "198.51.100.9", "198.51.100.23", "192.0.2.150", "198.51.100.41"]
     uas = ["Mozilla/5.0 (X11; Linux x86_64) Firefox/118.0", "Mozilla/5.0 (Macintosh) Safari/17.0",
            "curl/8.4.0", "okhttp/4.12.0"]
-    lines = []  # (instante, línea)
+    lines = []  # (instant, line)
 
     def add(ts, ip, method, path, status, ua):
         size = rng.randint(200, 4999)
@@ -111,7 +111,7 @@ def generate_nginx_log():
             200, rng.choice(uas))
         t += timedelta(seconds=rng.randint(10, 24))
 
-    # Respuestas 500 durante el incidente (la IP con más: 198.51.100.23, con 14)
+    # 500 responses during the incident (the IP with the most: 198.51.100.23, with 14)
     plan = [("198.51.100.23", 14), ("192.0.2.10", 6), ("192.0.2.77", 5), ("198.51.100.9", 4)]
     times = spread(rng, sum(n for _, n in plan) + 2, "14:03:20", "14:15:50")
     owners = [ip for ip, n in plan for _ in range(n)]
@@ -119,11 +119,11 @@ def generate_nginx_log():
     for ts, ip in zip(times, owners):
         add(ts, ip, "POST", "/api/payments", 500, rng.choice(uas))
 
-    # El atacante: dos 500 tempranos con la carga maliciosa en el User-Agent
+    # The attacker: two early 500s with the malicious payload in the User-Agent
     add(at("14:03:06"), ATTACKER_IP, "POST", "/api/payments", 500, INJECTED_UA)
     add(at("14:03:52"), ATTACKER_IP, "POST", "/api/payments", 500, INJECTED_UA)
 
-    # Distractores: 504 (no cuentan como 500)
+    # Distractors: 504s (they do not count as 500)
     for ts in spread(rng, 3, "14:04:00", "14:12:00"):
         add(ts, rng.choice(ips), "POST", "/api/payments", 504, rng.choice(uas))
 
@@ -132,11 +132,11 @@ def generate_nginx_log():
 
 
 def generate_gateway_log():
-    """Incidente B: un despliegue (INFO) desactiva la caché y, minutos después, la base de datos se satura."""
+    """Incident B: a deploy (INFO) disables the cache and, minutes later, the database saturates."""
     rng = random.Random(99)
     day = lambda hms: datetime(2026, 10, 12, *(int(x) for x in hms.split(":")))
     start, end = day("09:00:00"), day("09:40:00")
-    ev = []  # (instante, nivel, componente, mensaje)
+    ev = []  # (instant, level, component, message)
 
     t = start
     while t < end:
@@ -148,24 +148,24 @@ def generate_gateway_log():
                                       "health": "GET /health 200 (2ms)"}[kind]))
         t += timedelta(seconds=rng.randint(5, 12))
 
-    # Lo que NO es la causa: un error anterior sin relación y una advertencia de disco
+    # What is NOT the cause: an earlier unrelated error and a disk warning
     ev.append((day("09:02:15"), "ERROR", "mail", "Failed to send email (smtp timeout)"))
     ev.append((day("09:05:00"), "WARN", "system", "Disk usage at 78% on /data"))
 
-    # LA CAUSA: un cambio de configuración, registrado como INFO
+    # THE CAUSE: a configuration change, logged as INFO
     ev.append((day("09:10:04"), "INFO", "deploy",
                "Deployed release v2.14.0 (config change: search.cache_ttl_s 300 -> 0)"))
-    # Un síntoma (WARN) entre la causa y los errores
+    # A symptom (WARN) between the cause and the errors
     ev.append((day("09:12:50"), "WARN", "api", "p95 latency above threshold (2900ms > 1000ms)"))
 
-    # Las consecuencias: 31 timeouts a la base de datos (el primero a las 09:13:41) y 20 respuestas 503
+    # The consequences: 31 database timeouts (the first at 09:13:41) and 20 503 responses
     ev.append((day("09:13:41"), "ERROR", "db", "Upstream timeout calling db (latency=4310ms)"))
     for ts in sorted(day("09:14:10") + timedelta(seconds=s) for s in rng.sample(range(800), 30)):
         ev.append((ts, "ERROR", "db", f"Upstream timeout calling db (latency={rng.randint(3800, 6200)}ms)"))
     for ts in sorted(day("09:14:00") + timedelta(seconds=s) for s in rng.sample(range(810), 20)):
         ev.append((ts, "ERROR", "api", "Request failed: 503 Service Unavailable (path=/api/search)"))
 
-    # Recuperación: se revierte el cambio
+    # Recovery: the change is rolled back
     ev.append((day("09:27:40"), "INFO", "deploy",
                "Rolled back release v2.14.0 (config change: search.cache_ttl_s 0 -> 300)"))
     ev.append((day("09:28:30"), "INFO", "db", "Latency back to normal (p95=41ms)"))
@@ -175,13 +175,13 @@ def generate_gateway_log():
 
 
 GROUND_TRUTH = {
-    "timeouts_wompi": 37,
-    "primer_error_db": "14:02:10",
-    "ip_con_mas_500": "198.51.100.23",
-    "errores_redis": 0,
-    "b_timeouts_db": 31,
-    "b_primer_error_db": "09:13:41",
-    "b_despliegue": "09:10:04",
+    "wompi_timeouts": 37,
+    "first_db_error": "14:02:10",
+    "top_ip_500s": "198.51.100.23",
+    "redis_errors": 0,
+    "b_db_timeouts": 31,
+    "b_first_db_error": "09:13:41",
+    "b_deploy": "09:10:04",
 }
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""agentkit: esqueleto mínimo y reutilizable para agentes con herramientas."""
+"""agentkit: a minimal, reusable skeleton for agents with tools."""
 from .agent import Agent, AgentResult
 from .fs_tools import make_file_tools
 from .model import GeminiClient, ModelClient, ModelError, ModelTurn, ToolCall, ToolResult

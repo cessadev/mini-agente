@@ -1,4 +1,4 @@
-"""Herramientas de solo lectura sobre una carpeta. Mínimo privilegio: no escriben nada."""
+"""Read-only tools over a folder. Least privilege: they write nothing."""
 from pathlib import Path
 from typing import Sequence
 
@@ -7,16 +7,16 @@ from .tools import Tool, tool
 
 
 def make_file_tools(base_dir, max_chars: int = 20_000, examples: Sequence[str] = ()) -> "list[Tool]":
-    """Devuelve [list_files, read_file] confinadas a `base_dir`.
+    """Returns [list_files, read_file] confined to `base_dir`.
 
-    max_chars: tope de lo que read_file devuelve al modelo (evita llenar el contexto).
-    examples:  nombres de archivo de ejemplo para la descripción de read_file.
+    max_chars: cap on what read_file returns to the model (avoids filling the context).
+    examples:  example file names for the read_file description.
     """
     base = Path(base_dir).resolve()
     rel = f"./{base.name}"
-    ejemplos = ""
+    examples_text = ""
     if examples:
-        ejemplos = " (por ejemplo: " + ", ".join(f"'{e}'" for e in examples) + ")"
+        examples_text = " (por ejemplo: " + ", ".join(f"'{e}'" for e in examples) + ")"
 
     @tool(
         description=(
@@ -44,7 +44,7 @@ def make_file_tools(base_dir, max_chars: int = 20_000, examples: Sequence[str] =
 
     @tool(
         description=f"Lee el contenido completo de un archivo de texto dentro de la carpeta {rel}.",
-        params={"path": f"Ruta relativa del archivo a leer dentro de {rel}{ejemplos}."},
+        params={"path": f"Ruta relativa del archivo a leer dentro de {rel}{examples_text}."},
     )
     def read_file(path: str) -> dict:
         try:
@@ -55,7 +55,7 @@ def make_file_tools(base_dir, max_chars: int = 20_000, examples: Sequence[str] =
                 return {"error": f"La ruta '{path}' no es un archivo regular."}
 
             with open(target, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read(max_chars + 1)  # un carácter de más para saber si hubo recorte
+                content = f.read(max_chars + 1)  # one extra character to know whether it was truncated
             if len(content) > max_chars:
                 return {"content": content[:max_chars], "truncated": True, "limit_chars": max_chars}
             return {"content": content}

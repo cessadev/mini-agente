@@ -1,7 +1,7 @@
-"""Capa del modelo: aísla TODO lo específico de un proveedor (hoy, Gemini).
+"""Model layer: isolates EVERYTHING provider-specific (today, Gemini).
 
-El bucle del agente solo conoce estos tipos neutros. Para probar el bucle sin API se
-sustituye el cliente por uno falso; para cambiar de proveedor se escribe otro cliente.
+The agent loop only knows these neutral types. To test the loop without an API the client is
+replaced by a fake one; to change provider, another client is written.
 """
 import json
 from dataclasses import dataclass, field
@@ -9,10 +9,10 @@ from typing import Any, Dict, List, Optional, Protocol
 
 
 class ModelError(Exception):
-    """Fallo de infraestructura al llamar al modelo (cuota, timeout, red, API).
+    """Infrastructure failure when calling the model (quota, timeout, network, API).
 
-    str(e) es el mensaje listo para mostrar. La biblioteca lanza; quien decide
-    terminar el proceso (sys.exit) es el punto de entrada, no el código reutilizable.
+    str(e) is the message ready to be shown. The library raises; whoever decides to end
+    the process (sys.exit) is the entry point, not the reusable code.
     """
 
 
@@ -48,7 +48,7 @@ class ModelClient(Protocol):
 
 
 def _interaction_text(interaction) -> str:
-    """Extrae el texto de respuesta de una interacción de Gemini."""
+    """Extracts the answer text from a Gemini interaction."""
     if getattr(interaction, "output_text", None):
         return interaction.output_text
 
@@ -64,11 +64,11 @@ def _interaction_text(interaction) -> str:
 
 
 class GeminiClient:
-    """Cliente de la API Interactions de Gemini.
+    """Client for the Gemini Interactions API.
 
-    Los reintentos del SDK están desactivados a propósito: si no, un 429 con un
-    Retry-After largo dejaría el proceso dormido. La política de reintentos vive
-    en un solo sitio (evals.py), no escondida en el SDK.
+    The SDK retries are disabled on purpose: otherwise a 429 with a long Retry-After
+    would leave the process asleep. The retry policy lives in a single place (evals.py),
+    not hidden inside the SDK.
     """
 
     def __init__(self, model: str, timeout: float = 60.0, base_url: Optional[str] = None):
@@ -81,11 +81,11 @@ class GeminiClient:
         self.model = model
         self.timeout = timeout
         self._client = genai.Client(http_options=types.HttpOptions(**http_options_kwargs))
-        # Desactivar explícitamente reintentos en el recurso interactions
-        # para evitar que utils.retry capture 429 y duerma con la cabecera Retry-After
+        # Explicitly disable retries on the interactions resource so that
+        # utils.retry does not catch a 429 and sleep following the Retry-After header
         self._client.interactions.sdk_configuration.retry_config = None
 
-    # -- llamadas -----------------------------------------------------------------
+    # -- calls --------------------------------------------------------------------
     def start(self, prompt, tools, system_instruction=None) -> ModelTurn:
         kwargs: Dict[str, Any] = {"model": self.model, "input": prompt, "tools": tools}
         if system_instruction:
@@ -106,11 +106,11 @@ class GeminiClient:
             "model": self.model, "input": payload, "tools": tools,
             "previous_interaction_id": previous_id,
         }
-        if system_instruction:  # igual que las herramientas: se reenvía en cada turno
+        if system_instruction:  # same as the tools: it is re-sent on every turn
             kwargs["system_instruction"] = system_instruction
         return self._to_turn(self._create(**kwargs))
 
-    # -- internos -----------------------------------------------------------------
+    # -- internals ----------------------------------------------------------------
     def _to_turn(self, interaction) -> ModelTurn:
         steps = getattr(interaction, "steps", []) or []
         calls = [
@@ -131,9 +131,9 @@ class GeminiClient:
         )
 
     def _create(self, **kwargs):
-        """Envuelve ÚNICAMENTE la llamada a la API y traduce sus fallos a ModelError:
-        - 429: "LÍMITE/CUOTA:" más mensaje del servidor y Retry-After si existe.
-        - Timeout: "TIMEOUT:".  - Error de red: "RED:".  - Otro error: "ERROR API:".
+        """Wraps ONLY the API call and translates its failures into ModelError:
+        - 429: "RATE LIMIT/QUOTA:" plus the server message and Retry-After if present.
+        - Timeout: "TIMEOUT:".  - Network error: "NETWORK:".  - Any other error: "API ERROR:".
         """
         import httpx
 
@@ -163,7 +163,7 @@ class GeminiClient:
                     retry_after = e.response.headers.get("retry-after")
 
                 retry_info = f" (Retry-After: {retry_after})" if retry_after else ""
-                raise ModelError(f"LÍMITE/CUOTA: {server_msg}{retry_info}") from e
+                raise ModelError(f"RATE LIMIT/QUOTA: {server_msg}{retry_info}") from e
 
             is_timeout = (
                 type(e).__name__ in ("APITimeoutError", "TimeoutException", "ReadTimeout", "ConnectTimeout")
@@ -177,6 +177,6 @@ class GeminiClient:
                 or isinstance(e, (ConnectionError, httpx.NetworkError, httpx.RequestError))
             )
             if is_network:
-                raise ModelError(f"RED: {getattr(e, 'message', str(e))}") from e
+                raise ModelError(f"NETWORK: {getattr(e, 'message', str(e))}") from e
 
-            raise ModelError(f"ERROR API: {type(e).__name__}: {getattr(e, 'message', str(e))}") from e
+            raise ModelError(f"API ERROR: {type(e).__name__}: {getattr(e, 'message', str(e))}") from e

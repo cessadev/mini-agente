@@ -1,8 +1,8 @@
-"""Herramientas del agente.
+"""Agent tools.
 
-Una herramienta es UNA sola cosa: función + descripción + parámetros. El esquema que ve
-el modelo se genera a partir de la firma de la función, así no puede desincronizarse del
-código que realmente se ejecuta (antes eran tres piezas escritas a mano por separado).
+A tool is ONE single thing: function + description + parameters. The schema the model sees
+is generated from the function signature, so it cannot get out of sync with the code that
+actually runs (before, they were three hand-written pieces kept separately).
 """
 import inspect
 from dataclasses import dataclass
@@ -19,7 +19,7 @@ class Tool:
     func: Callable[..., Any]
 
     def declaration(self) -> Dict[str, Any]:
-        """Lo único que el modelo ve de la herramienta: nombre, descripción y parámetros."""
+        """All the model sees of the tool: name, description and parameters."""
         return {
             "type": "function",
             "name": self.name,
@@ -37,10 +37,10 @@ class Tool:
 
 
 def tool(description: str, params: Optional[Dict[str, str]] = None, name: Optional[str] = None):
-    """Convierte una función en una Tool.
+    """Turns a function into a Tool.
 
-    `params` da la descripción de cada parámetro. Los tipos salen de las anotaciones
-    (str, int, float, bool) y los parámetros sin valor por defecto son obligatorios.
+    `params` gives the description of each parameter. The types come from the annotations
+    (str, int, float, bool) and the parameters without a default value are required.
     """
     params = params or {}
 
@@ -53,8 +53,8 @@ def tool(description: str, params: Optional[Dict[str, str]] = None, name: Option
             annotation = hints.get(pname)
             if annotation not in _JSON_TYPES:
                 raise TypeError(
-                    f"{func.__name__}: el parámetro '{pname}' necesita una anotación "
-                    f"de tipo str, int, float o bool."
+                    f"{func.__name__}: parameter '{pname}' needs a type annotation "
+                    f"of str, int, float or bool."
                 )
             prop: Dict[str, Any] = {"type": _JSON_TYPES[annotation]}
             if pname in params:
@@ -65,7 +65,7 @@ def tool(description: str, params: Optional[Dict[str, str]] = None, name: Option
 
         unknown = set(params) - set(properties)
         if unknown:
-            raise ValueError(f"{func.__name__}: descripciones para parámetros inexistentes: {sorted(unknown)}")
+            raise ValueError(f"{func.__name__}: descriptions for nonexistent parameters: {sorted(unknown)}")
 
         schema: Dict[str, Any] = {"type": "object", "properties": properties}
         if required:
@@ -76,7 +76,7 @@ def tool(description: str, params: Optional[Dict[str, str]] = None, name: Option
 
 
 class ToolRegistry:
-    """Catálogo de herramientas + despachador. Reemplaza al if/elif de execute_tool."""
+    """Tool catalog + dispatcher. Replaces the old if/elif of execute_tool."""
 
     def __init__(self, tools: Iterable[Tool] = ()):
         self._tools: Dict[str, Tool] = {}
@@ -85,7 +85,7 @@ class ToolRegistry:
 
     def register(self, t: Tool) -> None:
         if t.name in self._tools:
-            raise ValueError(f"Herramienta duplicada: '{t.name}'.")
+            raise ValueError(f"Duplicate tool: '{t.name}'.")
         self._tools[t.name] = t
 
     def names(self) -> List[str]:
@@ -95,8 +95,8 @@ class ToolRegistry:
         return [t.declaration() for t in self._tools.values()]
 
     def execute(self, name: str, args: Any) -> Dict[str, Any]:
-        """Ejecuta lo que pidió el modelo. Nunca lanza: los errores vuelven como datos
-        para que el modelo los vea y pueda reaccionar."""
+        """Runs what the model asked for. It never raises: errors come back as data
+        so that the model sees them and can react."""
         if not isinstance(args, dict):
             args = {}
         t = self._tools.get(name)
@@ -105,9 +105,9 @@ class ToolRegistry:
         for p in t.required:
             if args.get(p) in (None, ""):
                 return {"error": f"El argumento '{p}' es requerido para {name}."}
-        kwargs = {k: v for k, v in args.items() if k in t.allowed}  # ignora argumentos inventados
+        kwargs = {k: v for k, v in args.items() if k in t.allowed}  # ignores invented arguments
         try:
             result = t.func(**kwargs)
-        except Exception as e:  # red de seguridad: un bug en una herramienta no tumba el bucle
+        except Exception as e:  # safety net: a bug in a tool does not bring down the loop
             return {"error": f"Error al ejecutar {name}: {e}"}
         return result if isinstance(result, dict) else {"result": result}

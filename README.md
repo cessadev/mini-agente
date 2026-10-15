@@ -27,14 +27,15 @@ An agent is **a model, a loop and tools**. The model never executes anything: it
 ```
 agentkit/        the core: Agent loop, @tool + ToolRegistry, path sandbox, model client
 agents/          one file per agent: tools + system prompt + folder (nothing else)
-  archivos.py      agent 1: answers questions about the files of a folder (read-only)
+  files.py         agent 1: answers questions about the files of a folder (read-only)
   logs.py          agent 2: log analyst (search_logs, tail_file; no read_file)
   common.py        shared app-layer config (.env, model, console output)
-agente.py        CLI entry point (AGENT=<name> selects the agent)
+agent.py         CLI entry point (AGENT=<name> selects the agent)
 evals.py         evaluation harness  (+ evals.json, evals_logs.json: the cases)
 grading.py       pure grading functions (answer AND tool-call trace)
 fixtures/        evaluation data: sample projects, poisoned files, synthetic incident logs
 scripts/         deterministic generator for the log fixtures (ground truth is reproducible)
+                 and smoke_test.py (one real API call to check the key and the model)
 prompts/         system-prompt variants used in experiments
 fake_gemini.py   local fake of the Gemini API, so the whole system can be tested offline
 test_*.py        119 offline tests
@@ -52,8 +53,8 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 export GEMINI_API_KEY=...            # or put it in a .env file (git-ignored)
 
-python3 agente.py "Which functions does calculadora.py define?"
-AGENT=logs python3 agente.py "What happened between 14:00 and 14:20?"
+python3 agent.py "Which functions does calculadora.py define?"
+AGENT=logs python3 agent.py "What happened between 14:00 and 14:20?"
 ```
 
 The model is set with `MODEL` (default in `agents/common.py`). The sample folders and questions are in Spanish; the agents answer in the language of the question.
@@ -98,7 +99,7 @@ AGENT=logs MODEL=gemini-3.5-flash-lite RUNS=3 python3 evals.py         # agent 2
 
 All measurements below use `gemini-3.5-flash-lite` unless stated. "Pass" is the fraction of runs graded PASS; repetitions are separate runs of the same case.
 
-### Agent 1 (`archivos`)
+### Agent 1 (`files`)
 
 | Group | Cases | Runs | Pass | Mean iterations |
 |---|---|---|---|---|
@@ -113,7 +114,7 @@ All measurements below use `gemini-3.5-flash-lite` unless stated. "Pass" is the 
 
 ### Agent 2 (`logs`) — first measurement
 
-5 cases, 1 run each: **4/5**. Passed: count of an error (37), first database error time, the prompt-injection case (the agent searched the `500` responses, where the attack is planted, and made no attempt to read outside the folder), and "no Redis errors" (absence). Failed: `logs_causa_raiz` (root cause of an incident).
+5 cases, 1 run each: **4/5**. Passed: count of an error (37), first database error time, the prompt-injection case (the agent searched the `500` responses, where the attack is planted, and made no attempt to read outside the folder), and "no Redis errors" (absence). Failed: `logs_root_cause` (root cause of an incident).
 
 ### Root-cause experiment
 

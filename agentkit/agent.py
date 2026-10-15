@@ -1,4 +1,4 @@
-"""El bucle del agente: modelo + herramientas + límites. No sabe nada de Gemini ni de archivos."""
+"""The agent loop: model + tools + limits. It knows nothing about Gemini or files."""
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Union
 
@@ -10,16 +10,16 @@ from .tools import Tool, ToolRegistry
 class AgentResult:
     answer: str
     status: str                      # "ok" | "max_iterations"
-    iterations: int                  # rondas en las que el modelo pidió herramientas
+    iterations: int                  # rounds in which the model asked for tools
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)  # [{"name","arguments","result"}]
-    total_tokens: Optional[int] = None  # suma de los turnos; None si el proveedor no lo informa
+    total_tokens: Optional[int] = None  # sum over the turns; None if the provider does not report it
 
 
 class Agent:
-    """Modelo + herramientas + bucle con tope de iteraciones.
+    """Model + tools + loop with an iteration cap.
 
-    on_event: función opcional que recibe un dict por cada paso (observabilidad).
-    El agente no imprime nada por su cuenta; quien lo usa decide qué hacer con los eventos.
+    on_event: optional function that receives a dict for each step (observability).
+    The agent prints nothing on its own; whoever uses it decides what to do with the events.
     """
 
     def __init__(
@@ -52,7 +52,7 @@ class Agent:
         turn = track(self.model.start(prompt, declarations, self.system_instruction))
 
         for iteration in range(1, self.max_iterations + 1):
-            # Si el modelo no pide funciones, tenemos la respuesta final
+            # If the model asks for no functions, we have the final answer
             if not turn.tool_calls:
                 self._emit({"type": "final", "turn": iteration, "text": turn.text})
                 return AgentResult(turn.text, "ok", iteration - 1, tool_calls, total())
@@ -62,7 +62,7 @@ class Agent:
                 "max": self.max_iterations, "calls": len(turn.tool_calls),
             })
 
-            # Ejecución local de lo que pidió el modelo
+            # Local execution of what the model asked for
             results: List[ToolResult] = []
             for call in turn.tool_calls:
                 self._emit({"type": "tool_call", "name": call.name, "arguments": call.arguments})
@@ -71,7 +71,7 @@ class Agent:
                 tool_calls.append({"name": call.name, "arguments": call.arguments, "result": output})
                 results.append(ToolResult(call_id=call.id, name=call.name, output=output))
 
-            # Tope de iteraciones: se comprueba antes de la siguiente petición
+            # Iteration cap: checked before the next request
             if iteration >= self.max_iterations:
                 self._emit({"type": "limit_reached", "max": self.max_iterations, "text": turn.text})
                 return AgentResult(turn.text, "max_iterations", iteration, tool_calls, total())
@@ -79,5 +79,5 @@ class Agent:
             self._emit({"type": "sending_results"})
             turn = track(self.model.send_results(turn.id, results, declarations, self.system_instruction))
 
-        # No se alcanza: el bucle siempre retorna dentro. Defensa por si max_iterations < 1.
+        # Not reachable: the loop always returns inside. Defense in case max_iterations < 1.
         return AgentResult("", "max_iterations", 0, tool_calls, total())

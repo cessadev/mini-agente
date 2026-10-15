@@ -9,11 +9,11 @@ import unittest
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
-AGENTE_PY = BASE_DIR / "agente.py"
+AGENT_PY = BASE_DIR / "agent.py"
 
 
 class RateLimitHandler(http.server.BaseHTTPRequestHandler):
-    """Responde inmediatamente 429 con cabecera Retry-After larga y cuerpo JSON."""
+    """Immediately answers 429 with a long Retry-After header and a JSON body."""
 
     def do_POST(self):
         self.send_response(429)
@@ -29,15 +29,15 @@ class RateLimitHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, format, *args):
-        # Silenciar logs del servidor durante la prueba
+        # Silence the server logs during the test
         pass
 
 
 class HangingHandler(http.server.BaseHTTPRequestHandler):
-    """Acepta la conexión pero nunca responde dentro de la ventana de tiempo."""
+    """Accepts the connection but never answers within the time window."""
 
     def do_POST(self):
-        # Mantiene la conexión abierta simulando cuelgue del servidor
+        # Keeps the connection open, simulating a hung server
         try:
             for _ in range(40):
                 time.sleep(0.5)
@@ -45,15 +45,15 @@ class HangingHandler(http.server.BaseHTTPRequestHandler):
             pass
 
     def log_message(self, format, *args):
-        # Silenciar logs del servidor durante la prueba
+        # Silence the server logs during the test
         pass
 
 
 class TestFailFast(unittest.TestCase):
     def test_case_1_rate_limit_429(self):
         """
-        Caso 1: el servidor responde 429 con Retry-After: 27458.
-        Esperado: el subproceso termina en menos de 10 s con código 2 y 'LÍMITE/CUOTA' en stderr.
+        Case 1: the server answers 429 with Retry-After: 27458.
+        Expected: the subprocess ends in under 10 s with exit code 2 and 'RATE LIMIT/QUOTA' in stderr.
         """
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), RateLimitHandler)
         port = server.server_port
@@ -67,31 +67,31 @@ class TestFailFast(unittest.TestCase):
 
             start_time = time.time()
             result = subprocess.run(
-                [sys.executable, str(AGENTE_PY)],
+                [sys.executable, str(AGENT_PY)],
                 capture_output=True,
                 text=True,
                 env=env,
-                timeout=10,  # Timeout de seguridad propio en el test
+                timeout=10,  # The test's own safety timeout
             )
             elapsed = time.time() - start_time
 
             self.assertLess(
-                elapsed, 10.0, f"El subproceso tardó demasiado: {elapsed:.2f} s"
+                elapsed, 10.0, f"The subprocess took too long: {elapsed:.2f} s"
             )
             self.assertEqual(
                 result.returncode,
                 2,
-                f"Código de salida esperado 2, obtenido {result.returncode}. Stderr: {result.stderr}",
+                f"Expected exit code 2, got {result.returncode}. Stderr: {result.stderr}",
             )
             self.assertIn(
-                "LÍMITE/CUOTA",
+                "RATE LIMIT/QUOTA",
                 result.stderr,
-                f"No se encontró 'LÍMITE/CUOTA' en stderr. Stderr obtenido: {result.stderr}",
+                f"'RATE LIMIT/QUOTA' not found in stderr. Stderr was: {result.stderr}",
             )
             self.assertIn(
                 "27458",
                 result.stderr,
-                f"No se encontró Retry-After en stderr. Stderr obtenido: {result.stderr}",
+                f"Retry-After not found in stderr. Stderr was: {result.stderr}",
             )
         finally:
             server.shutdown()
@@ -99,8 +99,8 @@ class TestFailFast(unittest.TestCase):
 
     def test_case_2_timeout(self):
         """
-        Caso 2: el servidor acepta la conexión y nunca responde; con AGENT_API_TIMEOUT=1.
-        Esperado: termina en menos de 10 s con código 2 y 'TIMEOUT' en stderr.
+        Case 2: the server accepts the connection and never answers; with AGENT_API_TIMEOUT=1.
+        Expected: it ends in under 10 s with exit code 2 and 'TIMEOUT' in stderr.
         """
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), HangingHandler)
         port = server.server_port
@@ -115,26 +115,26 @@ class TestFailFast(unittest.TestCase):
 
             start_time = time.time()
             result = subprocess.run(
-                [sys.executable, str(AGENTE_PY)],
+                [sys.executable, str(AGENT_PY)],
                 capture_output=True,
                 text=True,
                 env=env,
-                timeout=10,  # Timeout de seguridad propio en el test
+                timeout=10,  # The test's own safety timeout
             )
             elapsed = time.time() - start_time
 
             self.assertLess(
-                elapsed, 10.0, f"El subproceso tardó demasiado: {elapsed:.2f} s"
+                elapsed, 10.0, f"The subprocess took too long: {elapsed:.2f} s"
             )
             self.assertEqual(
                 result.returncode,
                 2,
-                f"Código de salida esperado 2, obtenido {result.returncode}. Stderr: {result.stderr}",
+                f"Expected exit code 2, got {result.returncode}. Stderr: {result.stderr}",
             )
             self.assertIn(
                 "TIMEOUT",
                 result.stderr,
-                f"No se encontró 'TIMEOUT' en stderr. Stderr obtenido: {result.stderr}",
+                f"'TIMEOUT' not found in stderr. Stderr was: {result.stderr}",
             )
         finally:
             server.shutdown()

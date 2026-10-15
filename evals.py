@@ -1,17 +1,17 @@
-"""Evaluación del agente: casos de evals.json -> resultados_<MODEL>[_<LABEL>].json
+"""Agent evaluation: cases from evals.json -> results_<MODEL>[_<LABEL>].json
 
-Variables de entorno:
-  AGENT    agente a medir (carpeta agents/); por defecto "archivos". Los casos de un agente
-           distinto viven en evals_<agente>.json y sus resultados en resultados_<agente>_...
-  MODEL    modelo a medir (también nombra el archivo de resultados)
-  RUNS     repeticiones por caso (por defecto 1)
-  CASES    ids separados por coma para medir solo algunos (ahorra cuota)
-  LABEL    etiqueta del experimento; separa resultados, p. ej. LABEL=defensivo
-  DELAY    pausa entre llamadas (s)   RETRIES  reintentos ante error de infraestructura
-  REGRADE=1  recalifica respuestas ya guardadas sin llamar a la API
+Environment variables:
+  AGENT    agent to measure (agents/ folder); default "files". The cases of any other agent
+           live in evals_<agent>.json and their results in results_<agent>_...
+  MODEL    model to measure (it also names the results file)
+  RUNS     repetitions per case (default 1)
+  CASES    comma-separated ids to measure only some (saves quota)
+  LABEL    experiment label; keeps results apart, e.g. LABEL=defensive
+  DELAY    pause between calls (s)   RETRIES  retries on infrastructure errors
+  REGRADE=1  re-grades answers already stored, without calling the API
 
-El agente se ejecuta en este mismo proceso (no en un subproceso) para poder leer la TRAZA
-de herramientas: qué intentó hacer, no solo qué dijo.
+The agent runs in this very process (not in a subprocess) so that the tool TRACE can be read:
+what it tried to do, not only what it said.
 """
 import json
 import os
@@ -35,51 +35,51 @@ DELAY = float(os.getenv("DELAY", "6"))
 RETRIES = int(os.getenv("RETRIES", "2"))
 ONLY = {c.strip() for c in os.getenv("CASES", "").split(",") if c.strip()}
 _prefix = "" if AGENT == DEFAULT_AGENT else f"{AGENT}_"
-OUT = Path(f"resultados_{_prefix}{MODEL}{'_' + LABEL if LABEL else ''}.json")
+OUT = Path(f"results_{_prefix}{MODEL}{'_' + LABEL if LABEL else ''}.json")
 
 
 def load_cases():
     if not CASES_FILE.is_file():
-        sys.exit(f"No hay casos para el agente '{AGENT}': falta {CASES_FILE.name}.")
+        sys.exit(f"No cases for agent '{AGENT}': {CASES_FILE.name} is missing.")
     cases = json.loads(CASES_FILE.read_text(encoding="utf-8"))
     if ONLY:
         unknown = ONLY - {c["id"] for c in cases}
         if unknown:
-            sys.exit(f"CASES contiene ids que no existen: {sorted(unknown)}")
+            sys.exit(f"CASES contains unknown ids: {sorted(unknown)}")
         cases = [c for c in cases if c["id"] in ONLY]
     for c in cases:
         if "dir" in c and not (FIXTURES / c["dir"]).is_dir():
-            sys.exit(f"El caso '{c['id']}' usa la carpeta fixtures/{c['dir']}, que no existe.")
+            sys.exit(f"Case '{c['id']}' uses folder fixtures/{c['dir']}, which does not exist.")
     return cases
 
 
 def plain(value):
-    """Convierte a JSON puro (los argumentos que devuelve el SDK pueden ser tipos propios)."""
+    """Converts to plain JSON (the arguments returned by the SDK may be custom types)."""
     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
 
 
 def run_once(case):
-    """Devuelve (AgentResult, ''), o (None, mensaje) si hubo un fallo de infraestructura."""
+    """Returns (AgentResult, ''), or (None, message) on an infrastructure failure."""
     from agentkit import ModelError
-    from agents import load_agent  # import tardío: REGRADE no necesita clave ni red
+    from agents import load_agent  # late import: REGRADE needs neither a key nor the network
 
     base_dir = FIXTURES / case["dir"] if "dir" in case else None
     try:
         return load_agent(AGENT).build_agent(base_dir=base_dir, on_event=None).run(case["question"]), ""
     except ModelError as e:
         return None, "error: " + str(e)[:300]
-    except Exception as e:  # p. ej. falta la clave de API
+    except Exception as e:  # e.g. the API key is missing
         return None, f"error: {type(e).__name__}: {str(e)[:300]}"
 
 
 def is_daily_quota(err):
     e = err.lower()
-    return "límite/cuota" in e and "per day" in e
+    return "rate limit/quota" in e and "per day" in e
 
 
 def to_entry(result, case):
-    """AgentResult -> entrada guardable. Guarda la traza y la respuesta cruda para poder
-    recalificar gratis (REGRADE) cuando un criterio cambie."""
+    """AgentResult -> storable entry. It keeps the trace and the raw answer so that it can be
+    re-graded for free (REGRADE) when a criterion changes."""
     answer = result.answer if result.status == "ok" else None
     calls = [
         {"name": c["name"], "arguments": plain(c["arguments"]),
@@ -92,7 +92,7 @@ def to_entry(result, case):
 
 
 def regrade(done, cases):
-    """Recalifica lo ya guardado con el evals.json actual. No llama a la API."""
+    """Re-grades what is already stored with the current evals.json. It does not call the API."""
     by_id = {c["id"]: c for c in cases}
     not_regradable = []
     for key, entry in done.items():
@@ -119,15 +119,15 @@ def summarize(done, cases):
     n_fail = sum(v["status"] == "FAIL" for _, v in vals)
     n_err = sum(v["status"] == "ERROR" for _, v in vals)
     tag = (f" [{AGENT}]" if AGENT != DEFAULT_AGENT else "") + (f" [{LABEL}]" if LABEL else "")
-    print(f"\nModelo: {MODEL}{tag} | PASS {n_pass} | FAIL {n_fail} | ERROR {n_err}")
+    print(f"\nModel: {MODEL}{tag} | PASS {n_pass} | FAIL {n_fail} | ERROR {n_err}")
     if n_pass + n_fail:
-        print(f"Precisión sobre respuestas válidas: {n_pass}/{n_pass + n_fail}")
+        print(f"Accuracy over valid answers: {n_pass}/{n_pass + n_fail}")
 
     groups = defaultdict(list)
     for c, v in vals:
-        groups[c.get("group", "basico")].append(v)
+        groups[c.get("group", "basic")].append(v)
     if len(groups) > 1:
-        print("\nPor grupo (PASS/válidas, iteraciones medias):")
+        print("\nBy group (PASS/valid, mean iterations):")
         for g, vs in groups.items():
             valid = [v for v in vs if v["status"] in ("PASS", "FAIL")]
             if not valid:
@@ -136,7 +136,7 @@ def summarize(done, cases):
             mean_iters = sum(v.get("iters", 0) for v in valid) / len(valid)
             print(f"  {g:<12} {passed}/{len(valid)}   iters≈{mean_iters:.1f}")
     if n_err:
-        print("\nHay ERRORES de infraestructura: repite el mismo comando, solo reintentará esos casos.")
+        print("\nThere are infrastructure ERRORS: repeat the same command; only those cases will be retried.")
 
 
 def main():
@@ -147,9 +147,9 @@ def main():
         not_regradable = regrade(done, cases)
         OUT.write_text(json.dumps(done, ensure_ascii=False, indent=2), encoding="utf-8")
         for key in not_regradable:
-            print(f"{key}: sin respuesta/traza guardada (no recalificable)")
+            print(f"{key}: no stored answer/trace (cannot be re-graded)")
         counts = [v.get("status") for v in done.values()]
-        print(f"\nModelo: {MODEL} | PASS {counts.count('PASS')} | "
+        print(f"\nModel: {MODEL} | PASS {counts.count('PASS')} | "
               f"FAIL {counts.count('FAIL')} | ERROR {counts.count('ERROR')}")
         sys.exit(0)
 
@@ -157,7 +157,7 @@ def main():
         for run in range(RUNS):
             key = f"{case['id']}#{run}"
             if done.get(key, {}).get("status") in ("PASS", "FAIL"):
-                continue  # ya medido
+                continue  # already measured
             result, err = None, ""
             for attempt in range(RETRIES + 1):
                 result, err = run_once(case)
@@ -166,9 +166,9 @@ def main():
                 if attempt < RETRIES:
                     time.sleep(20 * (attempt + 1))
             if result is None and is_daily_quota(err):
-                print(f"\nCUOTA DIARIA AGOTADA para {MODEL}: {err}")
-                print("Ejecución detenida. Lo medido está guardado; repite el comando "
-                      "cuando se reinicie la cuota, o usa otro modelo.")
+                print(f"\nDAILY QUOTA EXHAUSTED for {MODEL}: {err}")
+                print("Run stopped. What was measured is saved; repeat the command "
+                      "when the quota resets, or use another model.")
                 sys.exit(3)
             if result is None:
                 done[key] = {"status": "ERROR", "detail": err, "iters": 0}
